@@ -1,0 +1,69 @@
+pipeline {
+    agent any
+
+    environment {
+        PYTHON_VERSION = '3.10'
+        WORKSPACE_DIR = "${WORKSPACE}"
+        RESULTS_DIR = "${WORKSPACE}/test_results"
+        ALLURE_DIR = "${WORKSPACE}/allure-results"
+    }
+
+    stages {
+        stage('Setup Environment') {
+            steps {
+                sh '''
+                    python3 -m pip install --upgrade pip
+                    python3 setup_uiautomator2.py
+                    if [ ! -f "setup_status.json" ]; then
+                        echo "Environment setup failed"
+                        exit 1
+                    fi
+                    status=$(python3 -c "import json; print(json.load(open('setup_status.json'))['success'])")
+                    if [ "$status" != "True" ]; then
+                        echo "Environment setup failed. Check setup_status.json for details."
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh '''
+                    mkdir -p ${RESULTS_DIR}
+                    mkdir -p ${ALLURE_DIR}
+                    python3 -m pytest --alluredir=${ALLURE_DIR}
+                '''
+            }
+        }
+
+        stage('Generate Report') {
+            steps {
+                script {
+                    allure([
+                        includeProperties: false,
+                        jdk: '',
+                        properties: [],
+                        reportBuildPolicy: 'ALWAYS',
+                        results: [[path: "${ALLURE_DIR}"]]
+                    ])
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                // 生成测试结果JSON文件
+                def testResults = [
+                    success: currentBuild.resultIsBetterOrEqualTo('SUCCESS'),
+                    timestamp: new Date().format("yyyy-MM-dd HH:mm:ss"),
+                    buildNumber: currentBuild.number,
+                    errors: currentBuild.resultIsBetterOrEqualTo('SUCCESS') ? [] : ["Build failed"]
+                ]
+                writeJSON file: "${RESULTS_DIR}/test_results.json", json: testResults
+            }
+        }
+    }
+}
